@@ -22,10 +22,9 @@ RUN pnpm run build
 
 FROM node:24-alpine
 
+# ca-certificates: system CA bundle + update-ca-certificates.
+# su-exec: lets the entrypoint drop from root to the node user.
 RUN corepack enable pnpm \
-    # ca-certificates provides update-ca-certificates and the system CA bundle;
-    # su-exec lets the entrypoint drop from root to the node user after
-    # installing certificates.
  && apk add --no-cache ca-certificates su-exec
 WORKDIR /app
 ENV HUSKY=0
@@ -38,19 +37,16 @@ COPY --from=builder /app/dist/ ./dist/
 # NODE_ENV !== 'test' gate still passes, so app.listen/sweep/shutdown run).
 ENV NODE_ENV=production
 
-# Copy and prepare the entrypoint script
+# The entrypoint installs custom CA certificates (mounted at
+# /opt/custom-certificates) as root and then drops to the node user.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
-    # Create the mount-point so the directory always exists even without a bind-mount
- && mkdir -p /opt/custom-certificates \
-    # Ensure the entrypoint can write to the system CA directory (runs as root before dropping to node)
- && chmod 755 /usr/local/share/ca-certificates
+ && mkdir -p /opt/custom-certificates /usr/local/share/ca-certificates
 
 EXPOSE 3000
+# No `USER node` here on purpose: the entrypoint needs root for
+# update-ca-certificates and then runs the CMD as node via su-exec.
 
-# The entrypoint runs as root so it can install certificates, then execs the CMD as the node user.
-# Note: USER node is intentionally omitted here so the script can
-# call update-ca-certificates (requires root). The script itself drops privileges via exec "$@".
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
